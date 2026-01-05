@@ -1,8 +1,13 @@
 -- =====================================================================
 --  TOWER HEROES AUTOMATION ENGINE
 --  - Injects global commands:
---      Place, Deploy, Upgrade, Sell, Skip, Ability,
---      OnWave, AddUpgradeRule, SetCost, StartAutomation
+--      SetCost, Place, Deploy, AddUpgradeRule,
+--      Upgrade, Sell, Skip, Ability, OnWave, StartAutomation
+--  - Helpers:
+--      GetMana, GetWave, WaitForMana
+--  - AutoSkip:
+--      AutoSkip.enable, AutoSkip.disable,
+--      AutoSkip.toggle, AutoSkip.skipOnce
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -26,6 +31,7 @@ local State = {
     Costs = {             -- default, can be overridden with SetCost()
         ["Scientist"] = 250,
         ["Balloon Pal"] = 350,
+        ["Chef"] = 110,
     },
     PlacementRules = {    -- filled via Place()
         -- { wave = number, troop = string, pos = Vector3 }
@@ -226,7 +232,7 @@ end
 
 local function requestSkipWave()
     SkipWaveRemote:FireServer()
-    print("[SKIP] Wave skip requested")
+    -- no spam prints here
 end
 
 local function useWizardAbilityOn(troop)
@@ -355,6 +361,47 @@ function Automation:start()
 end
 
 -- =====================================================================
+--  AUTO SKIP MODULE
+-- =====================================================================
+
+AutoSkip = {}
+
+local autoSkipRunning = false
+
+local function doSkip()
+    -- Uses the global Skip() wrapper
+    Skip()
+end
+
+function AutoSkip.enable()
+    if autoSkipRunning then return end
+    autoSkipRunning = true
+
+    task.spawn(function()
+        while autoSkipRunning do
+            doSkip()
+            task.wait(1) -- same timing the game uses
+        end
+    end)
+end
+
+function AutoSkip.disable()
+    autoSkipRunning = false
+end
+
+function AutoSkip.toggle()
+    if autoSkipRunning then
+        AutoSkip.disable()
+    else
+        AutoSkip.enable()
+    end
+end
+
+function AutoSkip.skipOnce()
+    doSkip()
+end
+
+-- =====================================================================
 --  GLOBAL API (what YOU call)
 -- =====================================================================
 
@@ -432,6 +479,19 @@ end
 -- StartAutomation()
 function StartAutomation()
     Automation:start()
+end
+
+-- Helpers exposed globally for your strat scripts / GUI
+function GetMana()
+    return getMana()
+end
+
+function GetWave()
+    return State.CurrentWave
+end
+
+function WaitForMana(cost)
+    waitForMana(cost)
 end
 
 print("=== Tower Heroes Automation Engine Loaded ===")
