@@ -1,8 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE
---  - Injects global commands:
---      Place, Deploy, Upgrade, Sell, Skip, Ability,
---      OnWave, AddUpgradeRule, SetCost, StartAutomation
+--  TOWER HEROES AUTOMATION ENGINE (CORE)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -10,428 +7,146 @@ local RS = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 
 local Events = RS:WaitForChild("Events")
-local TroopPlace = Events:WaitForChild("TroopPlace")     -- placement
-local TroopEvent = Events:WaitForChild("TroopEvent")     -- upgrade/sell
-local SkipWaveRemote = Events:WaitForChild("SkipWave")   -- skip wave
-local WizardEvent = Events:FindFirstChild("WizardEvent") -- optional
+local TroopPlace = Events:WaitForChild("TroopPlace")     
+local TroopEvent = Events:WaitForChild("TroopEvent")     
+local SkipWaveRemote = Events:WaitForChild("SkipWave")   
+local WizardEvent = Events:FindFirstChild("WizardEvent") 
 
 local TroopFolder = workspace:WaitForChild("Troop")
 local HeroFolder = RS:WaitForChild("Troops")
 
--- =====================================================================
---  INTERNAL STATE
--- =====================================================================
-
+-- INTERNAL STATE
 local State = {
-    Costs = {             -- default, can be overridden with SetCost()
-        ["Scientist"] = 250,
-        ["Balloon Pal"] = 350,
-    },
-    PlacementRules = {    -- filled via Place()
-        -- { wave = number, troop = string, pos = Vector3 }
-    },
-    UpgradeRules = {      -- filled via AddUpgradeRule()
-        -- { name=string, index=number, minWave=number, minMana=number }
-    },
-    WaveCallbacks = {},   -- waveNumber → {callback, ...}
+    Costs = {},
+    PlacementRules = {},
+    UpgradeRules = {},
+    WaveCallbacks = {},
     CurrentWave = 0,
     Running = false,
-
-    Tracked = {},         -- [instance] = true
-    OwnedByName = {},     -- name → { troopInstance, ... } (placement order)
+    AutoSkipEnabled = false,
+    LastSkipValue = nil,
+    Tracked = {},         
+    OwnedByName = {},     
 }
 
--- =====================================================================
---  UI HELPERS + READERS
--- =====================================================================
-
+-- HELPERS
 local function getTextFromLabelOrFrame(obj)
     if not obj then return nil end
-
-    if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-        return obj.Text
-    end
-
+    if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then return obj.Text end
     local label = obj:FindFirstChildWhichIsA("TextLabel", true)
-    if label then
-        return label.Text
-    end
-
-    return nil
+    return label and label.Text or nil
 end
-
--- MANA ---------------------------------------------------------------
 
 local function getMana()
     local gui = player:FindFirstChild("PlayerGui")
-    if not gui then return 0 end
-
-    local menu = gui:FindFirstChild("Menu", true)
-    if not menu then return 0 end
-
-    local manaFolder = menu:FindFirstChild("Mana", true)
-    if not manaFolder then return 0 end
-
-    local amount = manaFolder:FindFirstChild("Amount", true)
+    local amount = gui and gui:FindFirstChild("Amount", true)
     if not amount then return 0 end
-
     local text = getTextFromLabelOrFrame(amount) or ""
-    local num = tonumber(text:match("%d+"))
-    return num or 0
+    return tonumber(text:match("%d+")) or 0
 end
-
-local function waitForMana(cost)
-    cost = cost or 0
-    while getMana() < cost do
-        task.wait(0.2)
-    end
-end
-
--- WAVE ---------------------------------------------------------------
 
 local function getWave()
     local gui = player:FindFirstChild("PlayerGui")
-    if not gui then return 0 end
-
-    local menu = gui:FindFirstChild("Menu", true)
-    if not menu then return 0 end
-
-    local hb = menu:FindFirstChild("HealthBar", true)
-    if not hb then return 0 end
-
-    local waveLabel = hb:FindFirstChild("WaveNum")
+    local hb = gui and gui:FindFirstChild("HealthBar", true)
+    local waveLabel = hb and hb:FindFirstChild("WaveNum")
     if not waveLabel then return 0 end
-
     local text = getTextFromLabelOrFrame(waveLabel) or ""
-    local current = text:match("Wave%s+(%d+)")
-    return tonumber(current) or 0
+    return tonumber(text:match("Wave%s+(%d+)")) or 0
 end
-
--- UPGRADE COST (selected troop) --------------------------------------
-
-local function getUpgradeCost()
-    local gui = player:FindFirstChild("PlayerGui")
-    if not gui then return nil end
-
-    local menu = gui:FindFirstChild("Menu", true)
-    if not menu then return nil end
-
-    local info = menu:FindFirstChild("InfoFrame", true)
-    if not info then return nil end
-
-    local upgrade = info:FindFirstChild("Upgrade", true)
-    if not upgrade then return nil end
-
-    local costContainer = upgrade:FindFirstChild("Cost", true)
-    if not costContainer then return nil end
-
-    local text = getTextFromLabelOrFrame(costContainer)
-    if not text then return nil end
-
-    local num = tonumber(text:match("%d+"))
-    return num
-end
-
--- SKIP INFO ----------------------------------------------------------
 
 local function getSkipInfo()
     local gui = player:FindFirstChild("PlayerGui")
-    if not gui then return nil, nil end
-
-    local menu = gui:FindFirstChild("Menu", true)
-    if not menu then return nil, nil end
-
-    local skip = menu:FindFirstChild("Skip", true)
-    if not skip then return nil, nil end
-
-    local topBar = skip:FindFirstChild("TopBar", true)
-    if not topBar then return nil, nil end
-
-    local skipNum = topBar:FindFirstChild("SkipNum")
+    local skip = gui and gui:FindFirstChild("Skip", true)
+    local skipNum = skip and skip:FindFirstChild("SkipNum", true)
     if not skipNum then return nil, nil end
-
-    local text = getTextFromLabelOrFrame(skipNum)
-    if not text then return nil, nil end
-
+    local text = getTextFromLabelOrFrame(skipNum) or ""
     local current, max = text:match("(%d+)%s*/%s*(%d+)")
     return tonumber(current), tonumber(max)
 end
 
--- =====================================================================
---  TROOP TRACKING
--- =====================================================================
-
-local function resetTracking()
-    State.Tracked = {}
-    State.OwnedByName = {}
-    for _, troop in ipairs(TroopFolder:GetChildren()) do
-        State.Tracked[troop] = true
-        local list = State.OwnedByName[troop.Name] or {}
-        table.insert(list, troop)
-        State.OwnedByName[troop.Name] = list
-    end
-end
-
 local function findNewTroop(name, pos)
-    local closest
-    local bestDist = math.huge
-
+    local closest, bestDist = nil, math.huge
     for _, troop in ipairs(TroopFolder:GetChildren()) do
         if troop.Name == name and not State.Tracked[troop] then
             local dist = (troop:GetModelCFrame().Position - pos).Magnitude
-            if dist < bestDist then
-                bestDist = dist
-                closest = troop
-            end
+            if dist < bestDist then bestDist = dist; closest = troop end
         end
     end
-
     if closest then
         State.Tracked[closest] = true
-        local list = State.OwnedByName[closest.Name] or {}
-        table.insert(list, closest)
-        State.OwnedByName[closest.Name] = list
+        State.OwnedByName[name] = State.OwnedByName[name] or {}
+        table.insert(State.OwnedByName[name], closest)
     end
-
     return closest
 end
 
-local function getOwnedTroop(name, index)
-    local list = State.OwnedByName[name]
-    if not list then return nil end
-    return list[index]
+-- GLOBAL API
+getgenv().EnableAutoSkip = function() State.AutoSkipEnabled = true end
+getgenv().DisableAutoSkip = function() State.AutoSkipEnabled = false end
+getgenv().SetCost = function(name, cost) State.Costs[name] = cost end
+getgenv().Place = function(name, x, y, z, wave)
+    table.insert(State.PlacementRules, {wave = wave or 1, troop = name, pos = Vector3.new(x, y, z)})
+end
+getgenv().AddUpgradeRule = function(rule)
+    table.insert(State.UpgradeRules, {
+        name = rule.name, index = rule.index or 1, 
+        minWave = rule.minWave or 0, minMana = rule.minMana or 0
+    })
 end
 
--- =====================================================================
---  REMOTE WRAPPERS
--- =====================================================================
-
-local function upgradeTroopInstance(troop)
-    if troop and troop.Parent == TroopFolder then
-        TroopEvent:FireServer("Upgrade", troop)
-        print("[UPGRADE] Fired upgrade for", troop.Name)
-    else
-        warn("[UPGRADE] Invalid troop instance")
-    end
-end
-
-local function sellTroopInstance(troop)
-    if troop and troop.Parent == TroopFolder then
-        TroopEvent:FireServer("Sell", troop)
-        print("[SELL] Fired sell for", troop.Name)
-    else
-        warn("[SELL] Invalid troop instance")
-    end
-end
-
-local function requestSkipWave()
-    SkipWaveRemote:FireServer()
-    print("[SKIP] Wave skip requested")
-end
-
-local function useWizardAbilityOn(troop)
-    if WizardEvent and troop and troop.Parent == TroopFolder then
-        WizardEvent:FireServer(troop)
-        print("[ABILITY] Wizard ability used on", troop.Name)
-    end
-end
-
--- =====================================================================
---  PLACEMENT CORE
--- =====================================================================
-
-local function deployInternal(name, targetPos)
-    local template = HeroFolder:FindFirstChild(name)
-    if not template then 
-        warn("Template missing:", name)
-        return nil 
-    end
-
-    local cost = State.Costs[name] or 0
-    waitForMana(cost)
-
-    -- select
-    TroopPlace:FireServer(template)
-    task.wait(0.3)
-
-    -- place
-    TroopPlace:FireServer(template, targetPos, 0)
-
-    -- verify + capture instance
-    task.wait(1.2)
-
-    local newTroop = findNewTroop(name, targetPos)
-    if newTroop then
-        print("[DEPLOY] Placed", name, "at", targetPos)
-        return newTroop
-    else
-        print("[DEPLOY] FAILED to detect instance for", name)
-        return nil
-    end
-end
-
--- =====================================================================
---  WAVE TRIGGER SYSTEM
--- =====================================================================
-
-local function registerWaveCallback(waveNumber, callback)
-    if type(waveNumber) ~= "number" or type(callback) ~= "function" then return end
-    local list = State.WaveCallbacks[waveNumber] or {}
-    table.insert(list, callback)
-    State.WaveCallbacks[waveNumber] = list
-end
-
-task.spawn(function()
-    local last = -1
-    while true do
-        local w = getWave()
-        if w ~= last then
-            last = w
-            State.CurrentWave = w
-            print("[WAVE] Now on wave:", w)
-            local list = State.WaveCallbacks[w]
-            if list then
-                for _, cb in ipairs(list) do
-                    task.spawn(cb)
-                end
-            end
-        end
-        task.wait(0.2)
-    end
-end)
-
--- =====================================================================
---  AUTOMATION ENGINE
--- =====================================================================
-
-local Automation = {}
-
-function Automation:initWavePlacement()
-    for _, rule in ipairs(State.PlacementRules) do
-        registerWaveCallback(rule.wave, function()
-            local cost = State.Costs[rule.troop] or 0
-            waitForMana(cost)
-            local troop = deployInternal(rule.troop, rule.pos)
-            if troop then
-                print(("[AUTO-PLACE] Wave %d placed %s"):format(rule.wave, rule.troop))
-            else
-                print(("[AUTO-PLACE] Wave %d FAILED to place %s"):format(rule.wave, rule.troop))
-            end
-        end)
-    end
-end
-
-function Automation:processUpgrades()
-    for _, rule in ipairs(State.UpgradeRules) do
-        if State.CurrentWave >= (rule.minWave or 0)
-            and getMana() >= (rule.minMana or 0) then
-
-            local troop = getOwnedTroop(rule.name, rule.index or 1)
-            if troop and troop.Parent == TroopFolder then
-                print(("[AUTO-UPGRADE] Trying to upgrade %s #%d")
-                    :format(rule.name, rule.index or 1))
-                upgradeTroopInstance(troop)
-            end
-        end
-    end
-end
-
-function Automation:startUpgradeLoop()
-    task.spawn(function()
-        while State.Running do
-            Automation:processUpgrades()
-            task.wait(1.0)
-        end
-    end)
-end
-
-function Automation:start()
+getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    resetTracking()
-    Automation:initWavePlacement()
-    Automation:startUpgradeLoop()
-    print("[Automation] Started")
-end
+    
+    -- Skip Loop
+    task.spawn(function()
+        while true do
+            if State.AutoSkipEnabled then
+                local cur = getSkipInfo()
+                if cur == 0 and cur ~= State.LastSkipValue then
+                    task.wait(0.1)
+                    SkipWaveRemote:FireServer()
+                end
+                State.LastSkipValue = cur
+            end
+            task.wait(0.5)
+        end
+    end)
 
--- =====================================================================
---  GLOBAL API (what YOU call)
--- =====================================================================
+    -- Main Loop
+    task.spawn(function()
+        local lastWave = -1
+        while true do
+            local w = getWave()
+            if w ~= lastWave then
+                lastWave = w
+                State.CurrentWave = w
+                if State.WaveCallbacks[w] then
+                    for _, cb in ipairs(State.WaveCallbacks[w]) do task.spawn(cb) end
+                end
+            end
+            for _, rule in ipairs(State.UpgradeRules) do
+                if State.CurrentWave >= rule.minWave and getMana() >= rule.minMana then
+                    local t = (State.OwnedByName[rule.name] or {})[rule.index]
+                    if t and t.Parent == TroopFolder then TroopEvent:FireServer("Upgrade", t) end
+                end
+            end
+            task.wait(1)
+        end
+    end)
 
--- SetCost(name, cost)
-function SetCost(name, cost)
-    State.Costs[name] = cost
-end
-
--- Place(troopName, x, y, z, waveNumber)
--- waveNumber is required for automation rules
-function Place(name, x, y, z, wave)
-    table.insert(State.PlacementRules, {
-        wave = wave or 1,
-        troop = name,
-        pos = Vector3.new(x, y, z)
-    })
-end
-
--- Deploy(name, x, y, z)
--- immediate placement (ignores wave system, still waits for mana)
-function Deploy(name, x, y, z)
-    return deployInternal(name, Vector3.new(x, y, z))
-end
-
--- AddUpgradeRule({ name=string, index=number, minWave=number, minMana=number })
-function AddUpgradeRule(rule)
-    table.insert(State.UpgradeRules, {
-        name = rule.name,
-        index = rule.index or 1,
-        minWave = rule.minWave or 0,
-        minMana = rule.minMana or 0,
-    })
-end
-
--- Upgrade(troopName, index)
-function Upgrade(name, index)
-    local troop = getOwnedTroop(name, index or 1)
-    if troop then
-        upgradeTroopInstance(troop)
-    else
-        warn("[Upgrade] No troop found:", name, "index", index or 1)
+    -- Register Placements
+    for _, rule in ipairs(State.PlacementRules) do
+        State.WaveCallbacks[rule.wave] = State.WaveCallbacks[rule.wave] or {}
+        table.insert(State.WaveCallbacks[rule.wave], function()
+            while getMana() < (State.Costs[rule.troop] or 0) do task.wait(0.5) end
+            local temp = HeroFolder:FindFirstChild(rule.troop)
+            TroopPlace:FireServer(temp)
+            task.wait(0.3)
+            TroopPlace:FireServer(temp, rule.pos, 0)
+            task.wait(1.5)
+            findNewTroop(rule.troop, rule.pos)
+        end)
     end
+    print("Engine Loaded and Started")
 end
-
--- Sell(troopName, index)
-function Sell(name, index)
-    local troop = getOwnedTroop(name, index or 1)
-    if troop then
-        sellTroopInstance(troop)
-    else
-        warn("[Sell] No troop found:", name, "index", index or 1)
-    end
-end
-
--- Skip()
-function Skip()
-    requestSkipWave()
-end
-
--- Ability(troopName, index)
-function Ability(name, index)
-    local troop = getOwnedTroop(name, index or 1)
-    if troop then
-        useWizardAbilityOn(troop)
-    else
-        warn("[Ability] No troop found:", name, "index", index or 1)
-    end
-end
-
--- OnWave(waveNumber, callback)
-function OnWave(waveNumber, callback)
-    registerWaveCallback(waveNumber, callback)
-end
-
--- StartAutomation()
-function StartAutomation()
-    Automation:start()
-end
-
-print("=== Tower Heroes Automation Engine Loaded ===")
