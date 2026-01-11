@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (V9 - FINAL INTEGRATED)
+--  TOWER HEROES AUTOMATION ENGINE (V10 - QUEUE SKIP)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -96,6 +96,10 @@ getgenv().QueueWaitMana = function(amt)
     table.insert(State.EventQueue, {type = "wait_mana", amount = amt})
 end
 
+getgenv().QueueSkip = function()
+    table.insert(State.EventQueue, {type = "skip"})
+end
+
 getgenv().QueueSell = function(name, index)
     table.insert(State.EventQueue, {type = "sell", name = name, index = index})
 end
@@ -107,8 +111,9 @@ end
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation V9 Started")
+    print("Automation V10 Started")
 
+    -- Background Auto-Skip Loop
     task.spawn(function()
         while true do
             if State.AutoSkipEnabled then
@@ -123,6 +128,7 @@ getgenv().StartAutomation = function()
         end
     end)
 
+    -- Main Processor
     task.spawn(function()
         while #State.EventQueue > 0 do
             local taskData = State.EventQueue[1]
@@ -133,6 +139,12 @@ getgenv().StartAutomation = function()
                     table.remove(State.EventQueue, 1)
                     print("Mana Target Reached: " .. taskData.amount)
                 end
+
+            elseif taskData.type == "skip" then
+                table.remove(State.EventQueue, 1)
+                SkipWaveRemote:FireServer()
+                print("QueueAction: Skipped Wave")
+                task.wait(0.5)
 
             elseif taskData.type == "smart_bulk" then
                 table.remove(State.EventQueue, 1)
@@ -177,21 +189,8 @@ getgenv().StartAutomation = function()
                         task.wait(0.3)
                     end
                 end
-
-            elseif taskData.type == "sell" then
-                table.remove(State.EventQueue, 1)
-                local list = State.OwnedByName[taskData.name]
-                local t = list and list[taskData.index]
-                if t then
-                    TroopEvent:FireServer("Sell", t)
-                    State.Tracked[t] = nil
-                    table.remove(list, taskData.index)
-                end
-
-            elseif taskData.type == "mode" then
-                table.remove(State.EventQueue, 1)
-                ModeVote:FireServer(taskData.mode)
-
+            
+            -- Fallback for other types
             else
                 table.remove(State.EventQueue, 1)
             end
