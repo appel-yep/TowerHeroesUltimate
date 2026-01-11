@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (MANA-PRIORITY / LEVEL-BASED)
+--  TOWER HEROES AUTOMATION ENGINE (V6 - FULL INTEGRATION)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -18,20 +18,8 @@ local HeroFolder = RS:WaitForChild("Troops")
 
 -- UPGRADE PRICE DATA
 local UpgradePrices = {
-    ["Chef"] = {
-        [1] = 110,   -- Placement
-        [2] = 1000,  -- Lv 2
-        [3] = 2200,  -- Lv 3
-        [4] = 3700,  -- Lv 4
-        [5] = 6000   -- Lv 5
-    },
-    ["Wizard"] = {
-        [1] = 100,
-        [2] = 430,
-        [3] = 1500,
-        [4] = 2400,
-        [5] = 4500
-    }
+    ["Chef"] = {[1] = 110, [2] = 1000, [3] = 2200, [4] = 3700, [5] = 6000},
+    ["Wizard"] = {[1] = 100, [2] = 430, [3] = 1500, [4] = 2400, [5] = 4500}
 }
 
 local State = {
@@ -82,12 +70,12 @@ local function trackTroop(name, pos)
     end
 end
 
--- GLOBAL API
-getgenv().EnableAutoSkip = function() State.AutoSkipEnabled = true end
-getgenv().DisableAutoSkip = function() State.AutoSkipEnabled = false end
-getgenv().SetCost = function(name, cost) State.Costs[name] = cost end
+-- =====================================================================
+--  GLOBAL API
+-- =====================================================================
+getgenv().EnableAutoSkip = function() State.AutoSkipEnabled = true; print("Auto-Skip Enabled") end
+getgenv().DisableAutoSkip = function() State.AutoSkipEnabled = false; print("Auto-Skip Disabled") end
 
--- Commands based on your logger
 getgenv().QueuePlace = function(name, x, y, z)
     table.insert(State.EventQueue, {type = "place", name = name, pos = Vector3.new(x, y, z)})
 end
@@ -101,17 +89,11 @@ getgenv().QueueSell = function(name, index)
 end
 
 getgenv().BulkUpgrade = function(name, level)
-    local count = State.OwnedByName[name] and #State.OwnedByName[name] or 0
-    for i = 1, count do
-        getgenv().QueueUpgrade(name, i, level)
-    end
+    table.insert(State.EventQueue, {type = "bulk_upgrade", name = name, level = level})
 end
 
 getgenv().BulkSell = function(name)
-    local count = State.OwnedByName[name] and #State.OwnedByName[name] or 0
-    for i = 1, count do
-        getgenv().QueueSell(name, i)
-    end
+    table.insert(State.EventQueue, {type = "bulk_sell", name = name})
 end
 
 getgenv().VoteMode = function(mode)
@@ -122,10 +104,13 @@ getgenv().RetryMatch = function()
     table.insert(State.EventQueue, {type = "retry"})
 end
 
+-- =====================================================================
+--  EXECUTION ENGINE
+-- =====================================================================
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation Started")
+    print("Automation Started (Level-Priority Mode)")
 
     -- Skip Loop
     task.spawn(function()
@@ -148,17 +133,41 @@ getgenv().StartAutomation = function()
             local taskData = State.EventQueue[1]
             local cost = 0
             
+            -- Calculate cost for requirement check
             if taskData.type == "place" then
-                cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][1]) or State.Costs[taskData.name] or 0
+                cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][1]) or 0
             elseif taskData.type == "upgrade" then
-                -- Pull cost based on the target level from the table
                 cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][taskData.level]) or 0
             end
 
+            -- Execute based on Mana
             if getMana() >= cost then
-                table.remove(State.EventQueue, 1)
+                if taskData.type == "bulk_upgrade" then
+                    table.remove(State.EventQueue, 1)
+                    local units = State.OwnedByName[taskData.name] or {}
+                    local upCost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][taskData.level]) or 0
+                    for i, unit in ipairs(units) do
+                        while getMana() < upCost do task.wait(0.5) end
+                        if unit and unit.Parent == TroopFolder then
+                            TroopEvent:FireServer("Upgrade", unit)
+                            print("Bulk Up: " .. taskData.name .. " #" .. i)
+                            task.wait(0.3)
+                        end
+                    end
 
-                if taskData.type == "place" then
+                elseif taskData.type == "bulk_sell" then
+                    table.remove(State.EventQueue, 1)
+                    local units = State.OwnedByName[taskData.name] or {}
+                    for i = #units, 1, -1 do
+                        local unit = units[i]
+                        TroopEvent:FireServer("Sell", unit)
+                        State.Tracked[unit] = nil
+                        table.remove(units, i)
+                        task.wait(0.1)
+                    end
+
+                elseif taskData.type == "place" then
+                    table.remove(State.EventQueue, 1)
                     local temp = HeroFolder:FindFirstChild(taskData.name)
                     TroopPlace:FireServer(temp)
                     task.wait(0.2)
@@ -166,14 +175,18 @@ getgenv().StartAutomation = function()
                     task.wait(1.5)
                     trackTroop(taskData.name, taskData.pos)
                     print("Placed " .. taskData.name)
+
                 elseif taskData.type == "upgrade" then
+                    table.remove(State.EventQueue, 1)
                     local t = (State.OwnedByName[taskData.name] or {})[taskData.index]
                     if t and t.Parent == TroopFolder then
                         TroopEvent:FireServer("Upgrade", t)
-                        print("Upgraded " .. taskData.name .. " #" .. taskData.index .. " to Lv " .. taskData.level)
-                        task.wait(0.5)
+                        print("Upgraded " .. taskData.name .. " #" .. taskData.index)
+                        task.wait(0.3)
                     end
+
                 elseif taskData.type == "sell" then
+                    table.remove(State.EventQueue, 1)
                     local list = State.OwnedByName[taskData.name]
                     local t = list and list[taskData.index]
                     if t then
@@ -182,9 +195,13 @@ getgenv().StartAutomation = function()
                         table.remove(list, taskData.index)
                         print("Sold " .. taskData.name .. " #" .. taskData.index)
                     end
+
                 elseif taskData.type == "mode" then
+                    table.remove(State.EventQueue, 1)
                     ModeVote:FireServer(taskData.mode)
+
                 elseif taskData.type == "retry" then
+                    table.remove(State.EventQueue, 1)
                     ResultEvent:FireServer("Retry")
                 end
             end
