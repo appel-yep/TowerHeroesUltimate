@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (V11 - FULL INTEGRATED)
+--  TOWER HEROES AUTOMATION ENGINE (V12 - API ALIGNMENT)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -100,6 +100,7 @@ getgenv().QueueWaitMana = function(amt)
     table.insert(State.EventQueue, {type = "wait_mana", amount = amt})
 end
 
+-- UPDATED TO BE CALLED AS QueueSkip()
 getgenv().QueueSkip = function()
     table.insert(State.EventQueue, {type = "skip"})
 end
@@ -119,9 +120,8 @@ end
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation V11 Engine Active")
+    print("Automation V12 Engine Active")
 
-    -- Constant Background Auto-Skip Loop
     task.spawn(function()
         while true do
             if State.AutoSkipEnabled then
@@ -136,7 +136,6 @@ getgenv().StartAutomation = function()
         end
     end)
 
-    -- Primary Queue Processor
     task.spawn(function()
         while #State.EventQueue > 0 do
             local taskData = State.EventQueue[1]
@@ -145,17 +144,14 @@ getgenv().StartAutomation = function()
             if taskData.type == "wait_mana" then
                 if currentMana >= taskData.amount then
                     table.remove(State.EventQueue, 1)
-                    print("Mana Target Reached: " .. taskData.amount)
                 end
 
             elseif taskData.type == "skip" then
-                -- Waits until Skip UI says 0 (Available)
                 local skipVal = getSkipValue()
                 if skipVal == 0 then
                     table.remove(State.EventQueue, 1)
                     task.wait(0.1)
                     SkipWaveRemote:FireServer()
-                    print("Queue: Smart Skip Executed")
                     task.wait(0.5)
                 end
 
@@ -168,7 +164,6 @@ getgenv().StartAutomation = function()
                         table.insert(toUpgrade, {model = u, level = getTroopLevel(u)})
                     end
                 end
-                -- Priority: Upgrade highest levels first
                 table.sort(toUpgrade, function(a, b) return a.level > b.level end)
                 for _, data in ipairs(toUpgrade) do
                     local nextLevel = data.level + 1
