@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (V7 - DYNAMIC BULK)
+--  TOWER HEROES AUTOMATION ENGINE (V9 - FINAL INTEGRATED)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -24,7 +24,6 @@ local UpgradePrices = {
 
 local State = {
     EventQueue = {},      
-    Costs = {},
     Running = false,
     AutoSkipEnabled = false,
     LastSkipValue = nil,
@@ -32,7 +31,7 @@ local State = {
     OwnedByName = {},     
 }
 
--- UI & DATA HELPERS
+-- INTERNAL HELPERS
 local function getMana()
     local gui = player:FindFirstChild("PlayerGui")
     local amount = gui and gui:FindFirstChild("Amount", true)
@@ -48,9 +47,16 @@ local function getSkipValue()
 end
 
 local function getTroopLevel(model)
-    local lvLabel = model:FindFirstChild("Level", true)
-    local txt = lvLabel and lvLabel.Text or "1"
-    return tonumber(txt:match("%d+")) or 1
+    local stats = model:FindFirstChild("Stats")
+    local lvObj = stats and stats:FindFirstChild("Level")
+    if lvObj then
+        if lvObj:IsA("NumberValue") or lvObj:IsA("IntValue") then
+            return lvObj.Value
+        elseif lvObj:IsA("TextLabel") then
+            return tonumber(lvObj.Text:match("%d+")) or 1
+        end
+    end
+    return 1
 end
 
 local function trackTroop(name, pos)
@@ -86,6 +92,10 @@ getgenv().QueueBulk = function(name)
     table.insert(State.EventQueue, {type = "smart_bulk", name = name})
 end
 
+getgenv().QueueWaitMana = function(amt)
+    table.insert(State.EventQueue, {type = "wait_mana", amount = amt})
+end
+
 getgenv().QueueSell = function(name, index)
     table.insert(State.EventQueue, {type = "sell", name = name, index = index})
 end
@@ -97,9 +107,8 @@ end
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation V7 Started")
+    print("Automation V9 Started")
 
-    -- Skip Loop
     task.spawn(function()
         while true do
             if State.AutoSkipEnabled then
@@ -114,36 +123,33 @@ getgenv().StartAutomation = function()
         end
     end)
 
-    -- Main Processor
     task.spawn(function()
         while #State.EventQueue > 0 do
             local taskData = State.EventQueue[1]
             local currentMana = getMana()
 
-            if taskData.type == "smart_bulk" then
+            if taskData.type == "wait_mana" then
+                if currentMana >= taskData.amount then
+                    table.remove(State.EventQueue, 1)
+                    print("Mana Target Reached: " .. taskData.amount)
+                end
+
+            elseif taskData.type == "smart_bulk" then
                 table.remove(State.EventQueue, 1)
                 local units = State.OwnedByName[taskData.name] or {}
-                
-                -- Create a list of {model, currentLevel}
                 local toUpgrade = {}
                 for _, u in ipairs(units) do
                     if u and u.Parent == TroopFolder then
                         table.insert(toUpgrade, {model = u, level = getTroopLevel(u)})
                     end
                 end
-
-                -- Sort Highest Level First
                 table.sort(toUpgrade, function(a, b) return a.level > b.level end)
-
-                -- Process upgrades based on Mana
                 for _, data in ipairs(toUpgrade) do
                     local nextLevel = data.level + 1
                     local cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][nextLevel]) or 999999
-                    
                     if getMana() >= cost then
                         TroopEvent:FireServer("Upgrade", data.model)
-                        print("SmartBulk: Upgraded " .. taskData.name .. " to Lv " .. nextLevel)
-                        task.wait(0.2) -- Small delay for server sync
+                        task.wait(0.3)
                     end
                 end
 
@@ -152,11 +158,13 @@ getgenv().StartAutomation = function()
                 if currentMana >= cost then
                     table.remove(State.EventQueue, 1)
                     local temp = HeroFolder:FindFirstChild(taskData.name)
-                    TroopPlace:FireServer(temp)
-                    task.wait(0.1)
-                    TroopPlace:FireServer(temp, taskData.pos, 0)
-                    task.wait(1.5)
-                    trackTroop(taskData.name, taskData.pos)
+                    if temp then
+                        TroopPlace:FireServer(temp)
+                        task.wait(0.1)
+                        TroopPlace:FireServer(temp, taskData.pos, 0)
+                        task.wait(1.5)
+                        trackTroop(taskData.name, taskData.pos)
+                    end
                 end
 
             elseif taskData.type == "upgrade" then
@@ -169,12 +177,26 @@ getgenv().StartAutomation = function()
                         task.wait(0.3)
                     end
                 end
-            
-            -- Add Sell/Mode/Retry logic here as per V6
+
+            elseif taskData.type == "sell" then
+                table.remove(State.EventQueue, 1)
+                local list = State.OwnedByName[taskData.name]
+                local t = list and list[taskData.index]
+                if t then
+                    TroopEvent:FireServer("Sell", t)
+                    State.Tracked[t] = nil
+                    table.remove(list, taskData.index)
+                end
+
+            elseif taskData.type == "mode" then
+                table.remove(State.EventQueue, 1)
+                ModeVote:FireServer(taskData.mode)
+
             else
                 table.remove(State.EventQueue, 1)
             end
             task.wait(0.5)
         end
+        print("Queue Finished")
     end)
 end
