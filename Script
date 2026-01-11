@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (MANA-PRIORITY)
+--  TOWER HEROES AUTOMATION ENGINE (V4 - BULK ACTIONS)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -10,13 +10,20 @@ local Events = RS:WaitForChild("Events")
 local TroopPlace = Events:WaitForChild("TroopPlace")     
 local TroopEvent = Events:WaitForChild("TroopEvent")     
 local SkipWaveRemote = Events:WaitForChild("SkipWave")   
+local ModeVote = Events:WaitForChild("ModeVote")
+local ResultEvent = Events:WaitForChild("ResultEvent")
 
 local TroopFolder = workspace:WaitForChild("Troop")
 local HeroFolder = RS:WaitForChild("Troops")
 
+-- DATA TABLES
+local UpgradePrices = {
+    ["Chef"] = {[1] = 110, [2] = 1000, [3] = 2200, [4] = 3700, [5] = 6000},
+    ["Wizard"] = {[1] = 100, [2] = 430, [3] = 1500, [4] = 2400, [5] = 4500}
+}
+
 local State = {
-    EventQueue = {},      -- List of tasks to do in order
-    Costs = {},
+    EventQueue = {},      
     Running = false,
     AutoSkipEnabled = false,
     LastSkipValue = nil,
@@ -24,7 +31,7 @@ local State = {
     OwnedByName = {},     
 }
 
--- UI HELPERS
+-- UI HELPERS (Same as before)
 local function getText(obj)
     if not obj then return nil end
     local label = (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj or obj:FindFirstChildWhichIsA("TextLabel", true)
@@ -62,26 +69,49 @@ local function trackTroop(name, pos)
     end
 end
 
--- GLOBAL API
-getgenv().EnableAutoSkip = function() State.AutoSkipEnabled = true end
-getgenv().DisableAutoSkip = function() State.AutoSkipEnabled = false end
-getgenv().SetCost = function(name, cost) State.Costs[name] = cost end
+-- =====================================================================
+--  GLOBAL API
+-- =====================================================================
 
--- New Queue-based Commands
 getgenv().QueuePlace = function(name, x, y, z)
     table.insert(State.EventQueue, {type = "place", name = name, pos = Vector3.new(x, y, z)})
 end
 
-getgenv().QueueUpgrade = function(name, index, cost)
-    table.insert(State.EventQueue, {type = "upgrade", name = name, index = index, cost = cost})
+getgenv().QueueUpgrade = function(name, index, targetLevel)
+    table.insert(State.EventQueue, {type = "upgrade", name = name, index = index, level = targetLevel})
 end
+
+getgenv().QueueSell = function(name, index)
+    table.insert(State.EventQueue, {type = "sell", name = name, index = index})
+end
+
+-- NEW: Bulk Upgrade (Upgrades ALL of a specific tower type once)
+getgenv().BulkUpgrade = function(name, targetLevel)
+    local count = State.OwnedByName[name] and #State.OwnedByName[name] or 0
+    for i = 1, count do
+        getgenv().QueueUpgrade(name, i, targetLevel)
+    end
+end
+
+-- NEW: Bulk Sell (Sells ALL of a specific tower type)
+getgenv().BulkSell = function(name)
+    local count = State.OwnedByName[name] and #State.OwnedByName[name] or 0
+    for i = 1, count do
+        getgenv().QueueSell(name, i)
+    end
+end
+
+getgenv().EnableAutoSkip = function() State.AutoSkipEnabled = true end
+getgenv().DisableAutoSkip = function() State.AutoSkipEnabled = false end
+
+-- =====================================================================
+--  EXECUTION ENGINE
+-- =====================================================================
 
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation Started (Mana-Priority Mode)")
 
-    -- Skip Loop
     task.spawn(function()
         while true do
             if State.AutoSkipEnabled then
@@ -96,21 +126,19 @@ getgenv().StartAutomation = function()
         end
     end)
 
-    -- Queue Processor (The Logic)
     task.spawn(function()
         while #State.EventQueue > 0 do
             local taskData = State.EventQueue[1]
             local cost = 0
             
             if taskData.type == "place" then
-                cost = State.Costs[taskData.name] or 0
-            else
-                cost = taskData.cost or 0
+                cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][1]) or 0
+            elseif taskData.type == "upgrade" then
+                cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][taskData.level]) or 0
             end
 
-            -- Wait until we have enough mana
             if getMana() >= cost then
-                table.remove(State.EventQueue, 1) -- Remove from queue
+                table.remove(State.EventQueue, 1)
 
                 if taskData.type == "place" then
                     local temp = HeroFolder:FindFirstChild(taskData.name)
@@ -119,18 +147,27 @@ getgenv().StartAutomation = function()
                     TroopPlace:FireServer(temp, taskData.pos, 0)
                     task.wait(1.5)
                     trackTroop(taskData.name, taskData.pos)
-                    print("Placed " .. taskData.name)
+
                 elseif taskData.type == "upgrade" then
                     local t = (State.OwnedByName[taskData.name] or {})[taskData.index]
                     if t and t.Parent == TroopFolder then
                         TroopEvent:FireServer("Upgrade", t)
-                        print("Upgraded " .. taskData.name .. " #" .. taskData.index)
-                        task.wait(0.5) -- Small delay between upgrades
+                        task.wait(0.3)
+                    end
+
+                elseif taskData.type == "sell" then
+                    local list = State.OwnedByName[taskData.name]
+                    if list and list[taskData.index] then
+                        local t = list[taskData.index]
+                        TroopEvent:FireServer("Sell", t)
+                        State.Tracked[t] = nil
+                        table.remove(list, taskData.index) -- Keep list synced
+                        task.wait(0.2)
                     end
                 end
             end
             task.wait(0.5)
         end
-        print("All queue tasks completed!")
+        print("Queue Finished")
     end)
 end
