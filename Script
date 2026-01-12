@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (V15 - FINAL STABLE)
+--  TOWER HEROES AUTOMATION ENGINE (V16 - SELL INTEGRATED)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -11,7 +11,6 @@ local TroopPlace = Events:WaitForChild("TroopPlace")
 local TroopEvent = Events:WaitForChild("TroopEvent")     
 local SkipWaveRemote = Events:WaitForChild("SkipWave")   
 local ModeVote = Events:WaitForChild("ModeVote")
-local ResultEvent = Events:WaitForChild("ResultEvent")
 
 local TroopFolder = workspace:WaitForChild("Troop")
 local HeroFolder = RS:WaitForChild("Troops")
@@ -100,6 +99,10 @@ getgenv().QueueSkip = function()
     table.insert(State.EventQueue, {type = "skip"})
 end
 
+getgenv().QueueSell = function(name, index)
+    table.insert(State.EventQueue, {type = "sell", name = name, index = index})
+end
+
 getgenv().VoteMode = function(mode)
     table.insert(State.EventQueue, {type = "mode", mode = mode})
 end
@@ -111,7 +114,7 @@ end
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation V15 Final Active")
+    print("Automation V16 Engine Active")
 
     task.spawn(function()
         while true do
@@ -168,6 +171,18 @@ getgenv().StartAutomation = function()
                         table.remove(State.EventQueue, 1)
                         task.wait(0.3)
                     end
+                end
+
+            elseif taskData.type == "sell" then
+                local t = (State.OwnedByName[taskData.name] or {})[taskData.index]
+                if t and t.Parent == TroopFolder then
+                    TroopEvent:FireServer("Sell", t)
+                    table.remove(State.OwnedByName[taskData.name], taskData.index)
+                    State.Tracked[t] = nil
+                    table.remove(State.EventQueue, 1)
+                    task.wait(0.3)
+                else
+                    table.remove(State.EventQueue, 1)
                 end
 
             elseif taskData.type == "smart_bulk" then
