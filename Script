@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (V13 - CORRECTED PLACEMENT)
+--  TOWER HEROES AUTOMATION ENGINE (V15 - FINAL STABLE)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -37,32 +37,27 @@ local State = {
 local function getMana()
     local gui = player:FindFirstChild("PlayerGui")
     local amount = gui and gui:FindFirstChild("Amount", true)
-    local txt = amount and amount.Text or ""
-    return tonumber(txt:match("%d+")) or 0
+    return amount and tonumber(amount.Text:match("%d+")) or 0
 end
 
 local function getSkipValue()
     local gui = player:FindFirstChild("PlayerGui")
     local skipNum = gui and gui:FindFirstChild("SkipNum", true)
-    local txt = skipNum and skipNum.Text or ""
-    return tonumber(txt:match("(%d+)")) or nil
+    return skipNum and tonumber(skipNum.Text:match("(%d+)")) or nil
 end
 
 local function getTroopLevel(model)
     local stats = model:FindFirstChild("Stats")
     local lvObj = stats and stats:FindFirstChild("Level")
     if lvObj then
-        if lvObj:IsA("NumberValue") or lvObj:IsA("IntValue") then
-            return lvObj.Value
-        elseif lvObj:IsA("TextLabel") then
-            return tonumber(lvObj.Text:match("%d+")) or 1
-        end
+        if lvObj:IsA("NumberValue") or lvObj:IsA("IntValue") then return lvObj.Value end
+        return tonumber(lvObj.Text:match("%d+")) or 1
     end
     return 1
 end
 
 local function trackTroop(name, pos)
-    local closest, bestDist = nil, math.huge
+    local closest, bestDist = nil, 5
     for _, troop in ipairs(TroopFolder:GetChildren()) do
         if troop.Name == name and not State.Tracked[troop] then
             local dist = (troop:GetModelCFrame().Position - pos).Magnitude
@@ -73,7 +68,9 @@ local function trackTroop(name, pos)
         State.Tracked[closest] = true
         State.OwnedByName[name] = State.OwnedByName[name] or {}
         table.insert(State.OwnedByName[name], closest)
+        return true
     end
+    return false
 end
 
 -- =====================================================================
@@ -103,10 +100,6 @@ getgenv().QueueSkip = function()
     table.insert(State.EventQueue, {type = "skip"})
 end
 
-getgenv().QueueSell = function(name, index)
-    table.insert(State.EventQueue, {type = "sell", name = name, index = index})
-end
-
 getgenv().VoteMode = function(mode)
     table.insert(State.EventQueue, {type = "mode", mode = mode})
 end
@@ -118,7 +111,7 @@ end
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation V13 Engine Active")
+    print("Automation V15 Final Active")
 
     task.spawn(function()
         while true do
@@ -140,17 +133,41 @@ getgenv().StartAutomation = function()
             local currentMana = getMana()
 
             if taskData.type == "wait_mana" then
-                if currentMana >= taskData.amount then
-                    table.remove(State.EventQueue, 1)
-                end
+                if currentMana >= taskData.amount then table.remove(State.EventQueue, 1) end
 
             elseif taskData.type == "skip" then
-                local skipVal = getSkipValue()
-                if skipVal == 0 then
+                if getSkipValue() == 0 then
                     table.remove(State.EventQueue, 1)
-                    task.wait(0.1)
                     SkipWaveRemote:FireServer()
                     task.wait(0.5)
+                end
+
+            elseif taskData.type == "place" then
+                local cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][1]) or 0
+                if currentMana >= cost then
+                    local temp = HeroFolder:FindFirstChild(taskData.name)
+                    if temp then
+                        local success = false
+                        for i = 1, 5 do
+                            TroopPlace:FireServer(temp, taskData.pos, 0)
+                            task.wait(0.5)
+                            if trackTroop(taskData.name, taskData.pos) then
+                                success = true; break 
+                            end
+                        end
+                        if success then table.remove(State.EventQueue, 1) end
+                    end
+                end
+
+            elseif taskData.type == "upgrade" then
+                local cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][taskData.level]) or 0
+                if currentMana >= cost then
+                    local t = (State.OwnedByName[taskData.name] or {})[taskData.index]
+                    if t and t.Parent == TroopFolder then
+                        TroopEvent:FireServer("Upgrade", t)
+                        table.remove(State.EventQueue, 1)
+                        task.wait(0.3)
+                    end
                 end
 
             elseif taskData.type == "smart_bulk" then
@@ -164,58 +181,22 @@ getgenv().StartAutomation = function()
                 end
                 table.sort(toUpgrade, function(a, b) return a.level > b.level end)
                 for _, data in ipairs(toUpgrade) do
-                    local nextLevel = data.level + 1
-                    local cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][nextLevel]) or 999999
-                    if getMana() >= cost then
+                    local nextLv = data.level + 1
+                    local upCost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][nextLv]) or 999999
+                    if getMana() >= upCost then
                         TroopEvent:FireServer("Upgrade", data.model)
                         task.wait(0.3)
                     end
                 end
 
-            elseif taskData.type == "place" then
-                local cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][1]) or 0
-                if currentMana >= cost then
-                    table.remove(State.EventQueue, 1)
-                    local temp = HeroFolder:FindFirstChild(taskData.name)
-                    if temp then
-                        -- UPDATED PLACEMENT REMOTE STRUCTURE
-                        TroopPlace:FireServer(temp, taskData.pos, 0)
-                        
-                        task.wait(1.5)
-                        trackTroop(taskData.name, taskData.pos)
-                    end
-                end
-
-            elseif taskData.type == "upgrade" then
-                local cost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][taskData.level]) or 0
-                if currentMana >= cost then
-                    table.remove(State.EventQueue, 1)
-                    local t = (State.OwnedByName[taskData.name] or {})[taskData.index]
-                    if t and t.Parent == TroopFolder then
-                        TroopEvent:FireServer("Upgrade", t)
-                        task.wait(0.3)
-                    end
-                end
-
-            elseif taskData.type == "sell" then
-                table.remove(State.EventQueue, 1)
-                local list = State.OwnedByName[taskData.name]
-                local t = list and list[taskData.index]
-                if t then
-                    TroopEvent:FireServer("Sell", t)
-                    State.Tracked[t] = nil
-                    table.remove(list, taskData.index)
-                end
-
             elseif taskData.type == "mode" then
                 table.remove(State.EventQueue, 1)
                 ModeVote:FireServer(taskData.mode)
-
             else
                 table.remove(State.EventQueue, 1)
             end
             task.wait(0.5)
         end
-        print("Queue Sequence Successfully Completed")
+        print("Queue Finished")
     end)
 end
