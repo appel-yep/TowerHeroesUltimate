@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (V12 - API ALIGNMENT)
+--  TOWER HEROES AUTOMATION ENGINE (V13 - CORRECTED PLACEMENT)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -16,7 +16,6 @@ local ResultEvent = Events:WaitForChild("ResultEvent")
 local TroopFolder = workspace:WaitForChild("Troop")
 local HeroFolder = RS:WaitForChild("Troops")
 
--- UPGRADE PRICE DATA
 local UpgradePrices = {
     ["Chef"] = {[1] = 110, [2] = 1000, [3] = 2200, [4] = 3700, [5] = 6000},
     ["Wizard"] = {[1] = 100, [2] = 430, [3] = 1500, [4] = 2400, [5] = 4500}
@@ -100,7 +99,6 @@ getgenv().QueueWaitMana = function(amt)
     table.insert(State.EventQueue, {type = "wait_mana", amount = amt})
 end
 
--- UPDATED TO BE CALLED AS QueueSkip()
 getgenv().QueueSkip = function()
     table.insert(State.EventQueue, {type = "skip"})
 end
@@ -120,7 +118,7 @@ end
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation V12 Engine Active")
+    print("Automation V13 Engine Active")
 
     task.spawn(function()
         while true do
@@ -180,9 +178,9 @@ getgenv().StartAutomation = function()
                     table.remove(State.EventQueue, 1)
                     local temp = HeroFolder:FindFirstChild(taskData.name)
                     if temp then
-                        TroopPlace:FireServer(temp)
-                        task.wait(0.1)
+                        -- UPDATED PLACEMENT REMOTE STRUCTURE
                         TroopPlace:FireServer(temp, taskData.pos, 0)
+                        
                         task.wait(1.5)
                         trackTroop(taskData.name, taskData.pos)
                     end
