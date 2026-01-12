@@ -1,5 +1,5 @@
 -- =====================================================================
---  TOWER HEROES AUTOMATION ENGINE (V16 - SELL INTEGRATED)
+--  TOWER HEROES AUTOMATION ENGINE (V19 - STABLE AUTO-WAIT)
 -- =====================================================================
 
 local Players = game:GetService("Players")
@@ -10,11 +10,11 @@ local Events = RS:WaitForChild("Events")
 local TroopPlace = Events:WaitForChild("TroopPlace")     
 local TroopEvent = Events:WaitForChild("TroopEvent")     
 local SkipWaveRemote = Events:WaitForChild("SkipWave")   
-local ModeVote = Events:WaitForChild("ModeVote")
 
 local TroopFolder = workspace:WaitForChild("Troop")
 local HeroFolder = RS:WaitForChild("Troops")
 
+-- Engine Price Table for Auto-Waiting
 local UpgradePrices = {
     ["Chef"] = {[1] = 110, [2] = 1000, [3] = 2200, [4] = 3700, [5] = 6000},
     ["Wizard"] = {[1] = 100, [2] = 430, [3] = 1500, [4] = 2400, [5] = 4500}
@@ -29,10 +29,7 @@ local State = {
     OwnedByName = {},     
 }
 
--- =====================================================================
---  INTERNAL HELPERS
--- =====================================================================
-
+-- [HELPERS]
 local function getMana()
     local gui = player:FindFirstChild("PlayerGui")
     local amount = gui and gui:FindFirstChild("Amount", true)
@@ -43,16 +40,6 @@ local function getSkipValue()
     local gui = player:FindFirstChild("PlayerGui")
     local skipNum = gui and gui:FindFirstChild("SkipNum", true)
     return skipNum and tonumber(skipNum.Text:match("(%d+)")) or nil
-end
-
-local function getTroopLevel(model)
-    local stats = model:FindFirstChild("Stats")
-    local lvObj = stats and stats:FindFirstChild("Level")
-    if lvObj then
-        if lvObj:IsA("NumberValue") or lvObj:IsA("IntValue") then return lvObj.Value end
-        return tonumber(lvObj.Text:match("%d+")) or 1
-    end
-    return 1
 end
 
 local function trackTroop(name, pos)
@@ -72,27 +59,13 @@ local function trackTroop(name, pos)
     return false
 end
 
--- =====================================================================
---  GLOBAL API
--- =====================================================================
-
-getgenv().EnableAutoSkip = function() State.AutoSkipEnabled = true end
-getgenv().DisableAutoSkip = function() State.AutoSkipEnabled = false end
-
+-- [GLOBAL API]
 getgenv().QueuePlace = function(name, x, y, z)
     table.insert(State.EventQueue, {type = "place", name = name, pos = Vector3.new(x, y, z)})
 end
 
 getgenv().QueueUpgrade = function(name, index, level)
     table.insert(State.EventQueue, {type = "upgrade", name = name, index = index, level = level})
-end
-
-getgenv().QueueBulk = function(name)
-    table.insert(State.EventQueue, {type = "smart_bulk", name = name})
-end
-
-getgenv().QueueWaitMana = function(amt)
-    table.insert(State.EventQueue, {type = "wait_mana", amount = amt})
 end
 
 getgenv().QueueSkip = function()
@@ -103,46 +76,21 @@ getgenv().QueueSell = function(name, index)
     table.insert(State.EventQueue, {type = "sell", name = name, index = index})
 end
 
-getgenv().VoteMode = function(mode)
-    table.insert(State.EventQueue, {type = "mode", mode = mode})
-end
-
--- =====================================================================
---  EXECUTION ENGINE
--- =====================================================================
-
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-    print("Automation V16 Engine Active")
-
-    task.spawn(function()
-        while true do
-            if State.AutoSkipEnabled then
-                local cur = getSkipValue()
-                if cur == 0 and cur ~= State.LastSkipValue then
-                    task.wait(0.1)
-                    SkipWaveRemote:FireServer()
-                end
-                State.LastSkipValue = cur
-            end
-            task.wait(0.5)
-        end
-    end)
+    print("V19 Engine Active")
 
     task.spawn(function()
         while #State.EventQueue > 0 do
             local taskData = State.EventQueue[1]
             local currentMana = getMana()
 
-            if taskData.type == "wait_mana" then
-                if currentMana >= taskData.amount then table.remove(State.EventQueue, 1) end
-
-            elseif taskData.type == "skip" then
+            if taskData.type == "skip" then
                 if getSkipValue() == 0 then
                     table.remove(State.EventQueue, 1)
                     SkipWaveRemote:FireServer()
-                    task.wait(0.5)
+                    task.wait(1)
                 end
 
             elseif taskData.type == "place" then
@@ -150,15 +98,10 @@ getgenv().StartAutomation = function()
                 if currentMana >= cost then
                     local temp = HeroFolder:FindFirstChild(taskData.name)
                     if temp then
-                        local success = false
-                        for i = 1, 5 do
-                            TroopPlace:FireServer(temp, taskData.pos, 0)
-                            task.wait(0.5)
-                            if trackTroop(taskData.name, taskData.pos) then
-                                success = true; break 
-                            end
-                        end
-                        if success then table.remove(State.EventQueue, 1) end
+                        table.remove(State.EventQueue, 1)
+                        TroopPlace:FireServer(temp, taskData.pos, 0)
+                        task.wait(1)
+                        trackTroop(taskData.name, taskData.pos)
                     end
                 end
 
@@ -167,51 +110,24 @@ getgenv().StartAutomation = function()
                 if currentMana >= cost then
                     local t = (State.OwnedByName[taskData.name] or {})[taskData.index]
                     if t and t.Parent == TroopFolder then
-                        TroopEvent:FireServer("Upgrade", t)
                         table.remove(State.EventQueue, 1)
-                        task.wait(0.3)
+                        TroopEvent:FireServer("Upgrade", t)
+                        task.wait(0.5)
+                    else
+                        table.remove(State.EventQueue, 1)
                     end
                 end
 
             elseif taskData.type == "sell" then
                 local t = (State.OwnedByName[taskData.name] or {})[taskData.index]
-                if t and t.Parent == TroopFolder then
+                if t then
                     TroopEvent:FireServer("Sell", t)
                     table.remove(State.OwnedByName[taskData.name], taskData.index)
                     State.Tracked[t] = nil
-                    table.remove(State.EventQueue, 1)
-                    task.wait(0.3)
-                else
-                    table.remove(State.EventQueue, 1)
                 end
-
-            elseif taskData.type == "smart_bulk" then
-                table.remove(State.EventQueue, 1)
-                local units = State.OwnedByName[taskData.name] or {}
-                local toUpgrade = {}
-                for _, u in ipairs(units) do
-                    if u and u.Parent == TroopFolder then
-                        table.insert(toUpgrade, {model = u, level = getTroopLevel(u)})
-                    end
-                end
-                table.sort(toUpgrade, function(a, b) return a.level > b.level end)
-                for _, data in ipairs(toUpgrade) do
-                    local nextLv = data.level + 1
-                    local upCost = (UpgradePrices[taskData.name] and UpgradePrices[taskData.name][nextLv]) or 999999
-                    if getMana() >= upCost then
-                        TroopEvent:FireServer("Upgrade", data.model)
-                        task.wait(0.3)
-                    end
-                end
-
-            elseif taskData.type == "mode" then
-                table.remove(State.EventQueue, 1)
-                ModeVote:FireServer(taskData.mode)
-            else
                 table.remove(State.EventQueue, 1)
             end
             task.wait(0.5)
         end
-        print("Queue Finished")
     end)
 end
