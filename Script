@@ -10,6 +10,7 @@ local ModeVote = Events:WaitForChild("ModeVote")
 
 local TroopFolder = workspace:WaitForChild("Troop")
 local HeroFolder = RS:WaitForChild("Troops")
+local PlayerGui = player:WaitForChild("PlayerGui")
 
 local UpgradePrices = {
     ["Chef"] = {[1] = 110, [2] = 1000, [3] = 2200, [4] = 3700, [5] = 6000},
@@ -51,22 +52,18 @@ local UpgradePrices = {
 local State = {
     EventQueue = {},      
     Running = false,
-    AutoSkipEnabled = false,
-    LastSkipValue = nil,
     Tracked = {},         
     OwnedByName = {},     
 }
 
 local function getMana()
-    local gui = player:FindFirstChild("PlayerGui")
-    local amount = gui and gui:FindFirstChild("Amount", true)
-    return amount and tonumber(amount.Text:match("%d+")) or 0
+    local gui = PlayerGui:FindFirstChild("Amount", true)
+    return gui and tonumber(gui.Text:match("%d+")) or 0
 end
 
 local function getSkipValue()
-    local gui = player:FindFirstChild("PlayerGui")
-    local skipNum = gui and gui:FindFirstChild("SkipNum", true)
-    return skipNum and tonumber(skipNum.Text:match("(%d+)")) or nil
+    local gui = PlayerGui:FindFirstChild("SkipNum", true)
+    return gui and tonumber(gui.Text:match("(%d+)")) or nil
 end
 
 local function getTroopLevel(model)
@@ -96,8 +93,31 @@ local function trackTroop(name, pos)
     return false
 end
 
-getgenv().EnableAutoSkip = function() State.AutoSkipEnabled = true end
-getgenv().DisableAutoSkip = function() State.AutoSkipEnabled = false end
+local function toggleAutoSkipUI(targetState)
+    local SkipCheckbox = PlayerGui:FindFirstChild("CheckBoxSKIP", true)
+    if not SkipCheckbox then return end
+    
+    local checkMark = SkipCheckbox:FindFirstChild("Checkmark")
+    local isCurrentlyOn = checkMark and checkMark.Visible
+    
+    if isCurrentlyOn ~= targetState then
+        local fakeInput = {
+            UserInputType = Enum.UserInputType.MouseButton1,
+            UserInputState = Enum.UserInputState.Begin,
+            KeyCode = Enum.KeyCode.Unknown,
+            Position = Vector3.new(0,0,0)
+        }
+        local events = {"Activated", "MouseButton1Click"}
+        for _, eventName in ipairs(events) do
+            for _, connection in pairs(getconnections(SkipCheckbox[eventName])) do
+                connection:Fire(fakeInput)
+            end
+        end
+    end
+end
+
+getgenv().EnableAutoSkip = function() toggleAutoSkipUI(true) end
+getgenv().DisableAutoSkip = function() toggleAutoSkipUI(false) end
 
 getgenv().QueuePlace = function(name, x, y, z)
     table.insert(State.EventQueue, {type = "place", name = name, pos = Vector3.new(x, y, z)})
@@ -130,20 +150,6 @@ end
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
-
-    task.spawn(function()
-        while true do
-            if State.AutoSkipEnabled then
-                local cur = getSkipValue()
-                if cur == 0 and cur ~= State.LastSkipValue then
-                    task.wait(0.05)
-                    SkipWaveRemote:FireServer()
-                end
-                State.LastSkipValue = cur
-            end
-            task.wait(0.2)
-        end
-    end)
 
     task.spawn(function()
         while #State.EventQueue > 0 do
