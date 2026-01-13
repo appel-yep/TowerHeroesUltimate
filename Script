@@ -93,7 +93,7 @@ local function trackTroop(name, pos)
     return false
 end
 
-local function toggleAutoSkipUI(targetState)
+local function runAutoSkipUI(targetState)
     local SkipCheckbox = PlayerGui:FindFirstChild("CheckBoxSKIP", true)
     if not SkipCheckbox then return end
     
@@ -116,8 +116,12 @@ local function toggleAutoSkipUI(targetState)
     end
 end
 
-getgenv().EnableAutoSkip = function() toggleAutoSkipUI(true) end
-getgenv().DisableAutoSkip = function() toggleAutoSkipUI(false) end
+getgenv().EnableAutoSkip = function() 
+    table.insert(State.EventQueue, {type = "toggle_autoskip", target = true}) 
+end
+getgenv().DisableAutoSkip = function() 
+    table.insert(State.EventQueue, {type = "toggle_autoskip", target = false}) 
+end
 
 getgenv().QueuePlace = function(name, x, y, z)
     table.insert(State.EventQueue, {type = "place", name = name, pos = Vector3.new(x, y, z)})
@@ -158,6 +162,10 @@ getgenv().StartAutomation = function()
 
             if taskData.type == "wait_mana" then
                 if currentMana >= taskData.amount then table.remove(State.EventQueue, 1) end
+
+            elseif taskData.type == "toggle_autoskip" then
+                table.remove(State.EventQueue, 1)
+                runAutoSkipUI(taskData.target)
 
             elseif taskData.type == "mode" then
                 table.remove(State.EventQueue, 1)
