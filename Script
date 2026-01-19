@@ -56,6 +56,7 @@ local State = {
     OwnedByName = {},     
 }
 
+-- Utility Functions
 local function getMana()
     local gui = PlayerGui:FindFirstChild("Amount", true)
     return gui and tonumber(gui.Text:match("%d+")) or 0
@@ -93,64 +94,37 @@ local function trackTroop(name, pos)
     return false
 end
 
+-- Fixed State-Sensing Toggle
 local function runAutoSkipUI(targetState)
-    local SkipCheckbox = PlayerGui:FindFirstChild("CheckBoxSKIP", true)
-    if not SkipCheckbox then return end
+    local autoSkipObj = PlayerGui:FindFirstChild("Menu"):FindFirstChild("Info"):FindFirstChild("AutoSkip")
+    local skipBtn = PlayerGui:FindFirstChild("CheckBoxSKIP", true)
     
-    local checkMark = SkipCheckbox:FindFirstChild("Checkmark")
-    local isCurrentlyOn = checkMark and checkMark.Visible
-    
-    if isCurrentlyOn ~= targetState then
-        local fakeInput = {
-            UserInputType = Enum.UserInputType.MouseButton1,
-            UserInputState = Enum.UserInputState.Begin,
-            KeyCode = Enum.KeyCode.Unknown,
-            Position = Vector3.new(0,0,0)
-        }
+    if autoSkipObj and skipBtn and autoSkipObj.Value ~= targetState then
+        local fakeInput = {UserInputType = Enum.UserInputType.MouseButton1, UserInputState = Enum.UserInputState.Begin, KeyCode = Enum.KeyCode.Unknown, Position = Vector3.new(0,0,0)}
         local events = {"Activated", "MouseButton1Click"}
         for _, eventName in ipairs(events) do
-            for _, connection in pairs(getconnections(SkipCheckbox[eventName])) do
-                connection:Fire(fakeInput)
+            local signal = skipBtn[eventName]
+            if signal then
+                for _, connection in pairs(getconnections(signal)) do
+                    connection:Fire(fakeInput)
+                end
             end
         end
     end
 end
 
-getgenv().EnableAutoSkip = function() 
-    table.insert(State.EventQueue, {type = "toggle_autoskip", target = true}) 
-end
-getgenv().DisableAutoSkip = function() 
-    table.insert(State.EventQueue, {type = "toggle_autoskip", target = false}) 
-end
+-- Global Commands
+getgenv().EnableAutoSkip = function() table.insert(State.EventQueue, {type = "toggle_autoskip", target = true}) end
+getgenv().DisableAutoSkip = function() table.insert(State.EventQueue, {type = "toggle_autoskip", target = false}) end
+getgenv().QueuePlace = function(name, x, y, z) table.insert(State.EventQueue, {type = "place", name = name, pos = Vector3.new(x, y, z)}) end
+getgenv().QueueUpgrade = function(name, index, level) table.insert(State.EventQueue, {type = "upgrade", name = name, index = index, level = level}) end
+getgenv().QueueBulk = function(name) table.insert(State.EventQueue, {type = "smart_bulk", name = name}) end
+getgenv().QueueWaitMana = function(amt) table.insert(State.EventQueue, {type = "wait_mana", amount = amt}) end
+getgenv().QueueSkip = function() table.insert(State.EventQueue, {type = "skip"}) end
+getgenv().QueueSell = function(name, index) table.insert(State.EventQueue, {type = "sell", name = name, index = index}) end
+getgenv().VoteMode = function(mode) table.insert(State.EventQueue, {type = "mode", mode = mode}) end
 
-getgenv().QueuePlace = function(name, x, y, z)
-    table.insert(State.EventQueue, {type = "place", name = name, pos = Vector3.new(x, y, z)})
-end
-
-getgenv().QueueUpgrade = function(name, index, level)
-    table.insert(State.EventQueue, {type = "upgrade", name = name, index = index, level = level})
-end
-
-getgenv().QueueBulk = function(name)
-    table.insert(State.EventQueue, {type = "smart_bulk", name = name})
-end
-
-getgenv().QueueWaitMana = function(amt)
-    table.insert(State.EventQueue, {type = "wait_mana", amount = amt})
-end
-
-getgenv().QueueSkip = function()
-    table.insert(State.EventQueue, {type = "skip"})
-end
-
-getgenv().QueueSell = function(name, index)
-    table.insert(State.EventQueue, {type = "sell", name = name, index = index})
-end
-
-getgenv().VoteMode = function(mode)
-    table.insert(State.EventQueue, {type = "mode", mode = mode})
-end
-
+-- Execution Engine
 getgenv().StartAutomation = function()
     if State.Running then return end
     State.Running = true
@@ -199,7 +173,7 @@ getgenv().StartAutomation = function()
                         TroopEvent:FireServer("Upgrade", t)
                         task.wait(0.1)
                     else
-                        table.remove(State.EventQueue, 1)
+                        table.remove(State.EventQueue, 1) -- Troop died/gone
                     end
                 end
 
@@ -234,5 +208,6 @@ getgenv().StartAutomation = function()
             end
             task.wait(0.1)
         end
+        State.Running = false
     end)
 end
